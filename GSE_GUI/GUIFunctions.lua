@@ -1,9 +1,10 @@
 local GSE = GSE
 local L = GSE.L
-function myUpdateFix()
+-- Namespaced onto GSE (was a bare global 'myUpdateFix' - global pollution/taint).
+function GSE.myUpdateFix()
   GSE:ProcessOOCQueue()
   GSE.ReloadSequences()
-  
+
 end
 --- This function pops up a confirmation dialog.
 function GSE.GUIDeleteSequence(currentSeq, iconWidget)
@@ -27,8 +28,9 @@ end
 --- Format the text against the GSE Sequence Spec.
 function GSE.GUIParseText(editbox)
   if GSEOptions.RealtimeParse then
-    text = GSE.UnEscapeString(editbox:GetText())
-    returntext = GSE.TranslateString(text , GetLocale(), GetLocale(), true)
+    -- text/returntext were global - localise to avoid global pollution/taint.
+    local text = GSE.UnEscapeString(editbox:GetText())
+    local returntext = GSE.TranslateString(text , GetLocale(), GetLocale(), true)
     editbox:SetText(returntext)
     editbox:SetCursorPosition(string.len(returntext)+2)
   end
@@ -42,7 +44,9 @@ function GSE.GUILoadEditor(key, incomingframe, recordedstring)
   if GSE.isEmpty(key) then
     classid = GSE.GetCurrentClassID()
     sequenceName = GSE.getSequenceName()
-	isNewFirstTimeCreated=true
+	-- Was a bare global; Editor.lua reads GSE.isNewFirstTimeCreated, so the bare
+	-- global assignment had no effect (and polluted _G).  Use the namespaced field.
+	GSE.isNewFirstTimeCreated=true
     sequence = {
       ["Author"] = GSE.GetCharacterName(),
       ["Talents"] = GSE.GetCurrentTalents(),
@@ -59,12 +63,23 @@ function GSE.GUILoadEditor(key, incomingframe, recordedstring)
         }
       },
     }
+    -- Default new sequences to Global (0) when the client doesn't report a spec
+    -- we recognise (classless / Conquest of Azeroth characters).  This makes the
+    -- editor's Specialisation/Class dropdown show "Global" instead of a blank
+    -- entry, and the macro works for every character.  A standard realm keeps its
+    -- detected spec.
+    if GSE.isEmpty(sequence.SpecID) or GSE.isEmpty(GSE.Static.wotlkSpecIDList[sequence.SpecID]) then
+      sequence.SpecID = 0
+    end
+    if GSE.isEmpty(classid) or GSE.isEmpty(GSE.Static.wotlkClassIDList[classid]) then
+      classid = 0
+    end
     if not GSE.isEmpty(recordedstring) then
       sequence.MacroVersions[1][1] = nil
       sequence.MacroVersions[1] = GSE.SplitMeIntolines(recordedstring)
     end
   else
-    elements = GSE.split(key, ",")
+    local elements = GSE.split(key, ",")
     classid = tonumber(elements[1])
     sequenceName = elements[2]
 	
@@ -85,7 +100,7 @@ function GSE.GUILoadEditor(key, incomingframe, recordedstring)
       end
       return
     end
-	isNewFirstTimeCreated=false
+	GSE.isNewFirstTimeCreated=false
   end
   GSE.GUIEditFrame.SequenceName = sequenceName
   GSE.GUIEditFrame.Sequence = sequence
@@ -101,7 +116,7 @@ function GSE.GUILoadEditor(key, incomingframe, recordedstring)
   GSE.GUIEditFrame.ContentContainer:SelectTab("config")
   incomingframe:Hide()
   if not InCombatLockdown() then
-	myUpdateFix()
+	GSE.myUpdateFix()
 	GSE.GUIEditFrame:Show()
   end
 
@@ -202,7 +217,7 @@ end
 
 
 function GSE.GUIGetColour(option)
-  hex = string.gsub(option, "#","")
+  -- 'hex' was an unused global (pollution); it is not needed by the return below.
   return tonumber("0x".. string.sub(option,5,6))/255, tonumber("0x"..string.sub(option,7,8))/255, tonumber("0x"..string.sub(option,9,10))/255
 end
 
@@ -224,4 +239,55 @@ function GSE.OpenOptionsPanel()
   config:Open("GSE")
   --config:SelectGroup("GSSE", "Debug")
 
+end
+
+--- Adds a "GSE" button to the ESC game menu (like ElvUI), for quicker access
+--  than typing /gse.  Inserted below the AddOns button; the Logout group and the
+--  frame height are shifted to make room.  Guarded and run once.
+function GSE.CreateGameMenuButton()
+  if _G["GSEGameMenuButton"] then
+    return
+  end
+  local frame = GameMenuFrame
+  if not frame then
+    return
+  end
+  local anchor = _G["GameMenuButtonAddOns"] or _G["GameMenuButtonMacros"]
+    or _G["GameMenuButtonKeybindings"] or _G["GameMenuButtonUIOptions"] or _G["GameMenuButtonOptions"]
+  if not anchor then
+    return
+  end
+
+  local btn = CreateFrame("Button", "GSEGameMenuButton", frame, "GameMenuButtonTemplate")
+  btn:SetText("|cffff0000G|r|cff00d1ffSE|r")
+  btn:SetPoint("TOP", anchor, "BOTTOM", 0, -1)
+  btn:SetScript("OnClick", function()
+    if HideUIPanel then
+      HideUIPanel(frame)
+    else
+      frame:Hide()
+    end
+    if not InCombatLockdown() then
+      GSE.GUIShowViewer()
+    end
+  end)
+
+  -- Push the Logout button (and everything anchored to it) down below our button
+  -- and grow the frame to fit, preserving Logout's original gap.
+  local logout = _G["GameMenuButtonLogout"]
+  local grow = (btn:GetHeight() or 16) + 1
+  if logout then
+    local point, _, relPoint, x, y = logout:GetPoint()
+    logout:ClearAllPoints()
+    logout:SetPoint(point or "TOP", btn, relPoint or "BOTTOM", x or 0, (y and y < 0) and y or -16)
+  end
+  frame:SetHeight((frame:GetHeight() or 0) + grow)
+end
+
+-- Insert the button the first time the game menu is shown (running after other
+-- addons such as ElvUI have laid the menu out).  Guarded so it only happens once.
+if GameMenuFrame then
+  GameMenuFrame:HookScript("OnShow", function()
+    pcall(GSE.CreateGameMenuButton)
+  end)
 end

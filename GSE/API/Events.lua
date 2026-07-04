@@ -133,11 +133,25 @@ end
 function GSE:PLAYER_ENTERING_WORLD()
   GSE.PrintAvailable = true
   GSE.PerformPrint()
+  -- Defensive: guarantee the out-of-combat compile queue timer is running.  If
+  -- OnEnable never fired (eg an error during init) the queue would never drain
+  -- and NO sequence would ever compile - producing exactly the "macros do
+  -- nothing" symptom.  StartOOCTimer is a no-op-safe re-arm.
+  if GSE.isEmpty(GSE.OOCTimer) and GSE.StartOOCTimer then
+    GSE.StartOOCTimer()
+    GSE.DiagTimerRearmed = true
+  end
 end
 
 function GSE:ADDON_LOADED(event, addon)
   if GSE.isEmpty(GSELibrary) then
     GSELibrary = {}
+  end
+  -- Remove the empty "" class bucket left behind by the old GetCurrentClassID
+  -- (which used to return "" for unrecognised classes).  Only drop it if empty
+  -- so no real data is lost.
+  if type(GSELibrary[""]) == "table" and next(GSELibrary[""]) == nil then
+    GSELibrary[""] = nil
   end
   if GSE.isEmpty(GSELibrary[GSE.GetCurrentClassID()]) then
     GSELibrary[GSE.GetCurrentClassID()] = {}
@@ -260,12 +274,21 @@ local myAceTimer = LibStub("AceTimer-3.0"):Embed(GSE)
 
 function GSE:UNIT_SPELLCAST_SUCCEEDED(event, unit, spell)
   if unit == "player" then
+    -- 61304 is the generic Global Cooldown probe spell.  On a custom spell DB it
+    -- may not exist, in which case GetSpellCooldown returns nil.  Passing a nil
+    -- delay to AceTimer:ScheduleTimer errors, and concatenating nil below errors
+    -- too - and this fires on EVERY successful cast.  Guard the duration.
     local _, GCD_Timer = GetSpellCooldown(61304)
+    GCD_Timer = tonumber(GCD_Timer) or 0
     GCD = true
 	--local BR = CreateFrame("Frame")
-	GCD_Update_Timer=myAceTimer:ScheduleTimer(AFTER_UNIT_SPELLCAST_SUCCEEDED, GCD_Timer)
+	if GCD_Timer > 0 then
+	  GCD_Update_Timer=myAceTimer:ScheduleTimer(AFTER_UNIT_SPELLCAST_SUCCEEDED, GCD_Timer)
+	else
+	  GCD = nil
+	end
     --GCD_Update_Timer = C_Timer.After(GCD_Timer, function () GCD = nil; GSE.PrintDebugMessage("GCD OFF") end)
-    GSE.PrintDebugMessage("GCD Delay:" .. " " .. GCD_Timer)
+    GSE.PrintDebugMessage("GCD Delay: " .. GCD_Timer)
     GSE.CurrentGCD = GCD_Timer
 
     if GSE.RecorderActive then
@@ -334,10 +357,22 @@ GSE:RegisterChatCommand("gse", "GSSlash")
 --- Handle slash commands
 function GSE:GSSlash(input)
   if string.lower(input) == "showspec" then
-    local currentSpec = GSE.GetCurrentSpecID()
+    -- GetCurrentSpecID returns (specid, name, icon); specid is nil on a classless
+    -- realm.  tostring() every part so this never errors (was crashing on nil).
     local currentSpecID, specname, specicon = GSE.GetCurrentSpecID()
-   -- local _, specname, specdescription, specicon, _, specrole, specclass = GetSpecializationInfoByID(currentSpecID)
-    GSE.Print(L["Your current Specialisation is "] .. currentSpecID .. ':' .. specname .. L["  The Alternative ClassID is "] .. currentclassId, GNOME)
+    GSE.Print(L["Your current Specialisation is "] .. tostring(currentSpecID) .. ':' .. tostring(specname) .. L["  The Alternative ClassID is "] .. tostring(GSE.GetCurrentClassID()), GNOME)
+  elseif string.lower(input) == "diag" or string.lower(input) == "diagnostics" then
+    if GSE.ShowDiagnostics then
+      GSE.ShowDiagnostics()
+    else
+      GSE.Print("Diagnostics module not loaded.")
+    end
+  elseif string.lower(input) == "diaglog" or string.lower(input) == "errorlog" then
+    if GSE.ShowErrorLog then
+      GSE.ShowErrorLog()
+    else
+      GSE.Print("Diagnostics module not loaded.")
+    end
   elseif string.lower(input) == "help" then
     PrintGnomeHelp()
   elseif string.lower(input) == "cleanorphans" or string.lower(input) == "clean" then
@@ -392,6 +427,7 @@ function GSE:processReload(action, arg)
 end
 
 function GSE:OnEnable()
+  GSE.DiagOnEnableRan = true
   GSE.StartOOCTimer()
 end
 
@@ -407,55 +443,86 @@ function GSE.StopOOCTimer()
 end
 
 
-function GSE:ProcessOOCQueue()
-  if GSE.isEmpty(GSE.OOCQueue) then
+local function ProcessOOCQueueEntry(v)
+  if GSE.isEmpty(v) or GSE.isEmpty(v.action) then
+    GSE.PrintDebugMessage("Invalid OOC Queue entry", "Events")
     return
   end
-  
-  for k,v in ipairs(GSE.OOCQueue) do
-    if not InCombatLockdown() then
-      local success, err = pcall(function()
-        if GSE.isEmpty(v) or GSE.isEmpty(v.action) then
-          GSE.PrintDebugMessage("Invalid OOC Queue entry", "Events")
-          return
-        end
-        
-        if v.action == "UpdateSequence" then
-          GSE.OOCUpdateSequence(v.name, v.macroversion)
-        elseif v.action == "Save" then
-          GSE.OOCAddSequenceToCollection(v.sequencename, v.sequence, v.classid)
-        elseif v.action == "Replace" then
-          if GSE.isEmpty(v.classid) or GSE.isEmpty(v.sequencename) then
-            GSE.Print("ERROR: Replace action missing classid or sequencename")
-            return
-          end
-          
-          if GSE.isEmpty(GSELibrary[v.classid]) then
-            GSELibrary[v.classid] = {}
-          end
-          
-          -- Always save the sequence directly
-          GSELibrary[v.classid][v.sequencename] = v.sequence
-          GSE.Print("Saved sequence: " .. v.sequencename .. " for class " .. v.classid)
-          
-          if not GSE.isEmpty(v.sequence) and not GSE.isEmpty(v.sequence.MacroVersions) then
-            local activeVersion = v.sequence.Default or 1
-            if v.sequence.MacroVersions[activeVersion] then
-              GSE.OOCUpdateSequence(v.sequencename, v.sequence.MacroVersions[activeVersion])
-            end
-          end
-        elseif v.action == "openviewer" then
-          GSE.GUIShowViewer()
-        elseif v.action == "CheckMacroCreated" then
-          GSE.OOCCheckMacroCreated(v.sequencename, v.create)
-        end
-      end)
-      
-      if not success then
-        GSE.PrintDebugMessage("Error processing OOC Queue item: " .. tostring(err), "Events")
+
+  if v.action == "UpdateSequence" then
+    GSE.OOCUpdateSequence(v.name, v.macroversion)
+  elseif v.action == "Save" then
+    GSE.OOCAddSequenceToCollection(v.sequencename, v.sequence, v.classid)
+  elseif v.action == "Replace" then
+    if GSE.isEmpty(v.classid) or GSE.isEmpty(v.sequencename) then
+      GSE.Print("ERROR: Replace action missing classid or sequencename")
+      return
+    end
+
+    if GSE.isEmpty(GSELibrary[v.classid]) then
+      GSELibrary[v.classid] = {}
+    end
+
+    -- Always save the sequence directly
+    GSELibrary[v.classid][v.sequencename] = v.sequence
+    GSE.PrintDebugMessage("Saved sequence: " .. tostring(v.sequencename) .. " for class " .. tostring(v.classid), "Events")
+
+    if not GSE.isEmpty(v.sequence) and not GSE.isEmpty(v.sequence.MacroVersions) then
+      local activeVersion = v.sequence.Default or 1
+      if v.sequence.MacroVersions[activeVersion] then
+        GSE.OOCUpdateSequence(v.sequencename, v.sequence.MacroVersions[activeVersion])
       end
-      
-      GSE.OOCQueue[k] = nil
+    end
+  elseif v.action == "openviewer" then
+    GSE.GUIShowViewer()
+  elseif v.action == "CheckMacroCreated" then
+    GSE.OOCCheckMacroCreated(v.sequencename, v.create)
+  end
+end
+
+function GSE:ProcessOOCQueue()
+  GSE.DiagOOCTicks = (GSE.DiagOOCTicks or 0) + 1
+  if GSE.isEmpty(GSE.OOCQueue) or InCombatLockdown() then
+    return
+  end
+
+  -- Swap the queue out so any new saves that arrive while we drain go onto a
+  -- fresh queue.  The old code set GSE.OOCQueue[k]=nil mid-ipairs, which could
+  -- orphan later entries if combat started partway through the drain (ipairs
+  -- then stopped at the first niled slot on the next tick).
+  local queue = GSE.OOCQueue
+  GSE.OOCQueue = {}
+
+  for k = 1, #queue do
+    if InCombatLockdown() then
+      -- Combat started mid-drain: preserve the unprocessed remainder for the
+      -- next out-of-combat tick.
+      for i = k, #queue do
+        table.insert(GSE.OOCQueue, queue[i])
+      end
+      return
+    end
+
+    local v = queue[k]
+    local success, err = pcall(ProcessOOCQueueEntry, v)
+
+    if not success then
+      local label = (v and (v.name or v.sequencename or v.action)) or "unknown"
+      GSE.PrintDebugMessage("Error processing OOC Queue item (" .. tostring(v and v.action) .. " / " .. tostring(label) .. "): " .. tostring(err), "Events")
+      -- This error was caught by pcall so it never reaches the global error
+      -- handler; persist it to the diagnostic log explicitly so /gse diag and
+      -- the SavedVariables ErrorLog capture the real compile failure.
+      if GSE.DiagAppendError then
+        GSE.DiagAppendError("OOCQueue " .. tostring(v and v.action) .. " '" .. tostring(label) .. "': " .. tostring(err))
+      end
+      -- Surface the failure once per sequence (dedup so we don't spam on every
+      -- ReloadSequences).  The pcall keeps one bad entry from stalling the queue.
+      GSE.OOCReportedErrors = GSE.OOCReportedErrors or {}
+      if not GSE.OOCReportedErrors[label] then
+        GSE.OOCReportedErrors[label] = true
+        -- Error-reporting code must never error itself: guard every value.
+        GSE.Print((GSEOptions.UNKNOWN or "") .. "GSE could not process a queued change for '" .. tostring(label) .. "'." .. (Statics.StringReset or "") .. " " .. tostring(err))
+      end
     end
   end
 end

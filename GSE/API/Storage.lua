@@ -7,6 +7,23 @@ local GNOME = "Storage"
 local MAX_CHARACTER_MACROS = MAX_CHARACTER_MACROS or 18
 local MAX_ACCOUNT_MACROS = MAX_ACCOUNT_MACROS or 120
 
+--- True if obj is a secure-handler button GSE can drive (SetAttribute/Execute/
+--  WrapScript).  Used to tell "our button" apart from an unrelated global that
+--  happens to share the sequence name (eg _G["test"] being a plain function on
+--  a custom client).
+local function IsUsableSecureButton(obj)
+  return type(obj) == "table"
+     and type(obj.SetAttribute) == "function"
+     and type(obj.Execute) == "function"
+     and type(obj.WrapScript) == "function"
+end
+GSE.IsUsableSecureButton = IsUsableSecureButton
+
+--- True if obj looks like any WoW frame/region (has GetObjectType).
+local function IsWoWFrame(obj)
+  return type(obj) == "table" and type(obj.GetObjectType) == "function"
+end
+
 
 --- Delete a sequence starting with the macro and then the sequence from the library
 function GSE.DeleteSequence(classid, sequenceName)
@@ -549,9 +566,15 @@ end
 function GSE.ResetButtons()
   for k,v in pairs(GSE.UsedSequences) do
     local gsebutton = _G[k]
-    if gsebutton:GetAttribute("combatreset") == true then
-      gsebutton:SetAttribute("step",1)
-      GSE.UpdateIcon(gsebutton, true)
+    -- Guard: the global for this name might not be our button (name collision,
+    -- or it was removed).  Never index it blind.
+    if IsUsableSecureButton(gsebutton) then
+      if gsebutton:GetAttribute("combatreset") == true then
+        gsebutton:SetAttribute("step",1)
+        GSE.UpdateIcon(gsebutton, true)
+        GSE.UsedSequences[k] = nil
+      end
+    else
       GSE.UsedSequences[k] = nil
     end
   end
@@ -575,12 +598,36 @@ function GSE.OOCUpdateSequence(name,sequence)
     GSE.FixSequence(sequence)
     local tempseq = GSE.CloneMacroVersion(sequence)
 
+    -- Decide whether we already have a usable button for this name.  The old
+    -- check was `GSE.isEmpty(_G[name])`, which is false for ANY non-nil global -
+    -- including a global function.  On this client _G["test"] is a function, so
+    -- GSE skipped CreateButton and then crashed trying to index the function as a
+    -- frame (Storage.lua "attempt to index a function value").  Handle each case.
     local existingbutton = true
-    if GSE.isEmpty(_G[name]) then
-      GSE.CreateButton(name,tempseq)
+    local existing = _G[name]
+    if IsUsableSecureButton(existing) then
+      -- Our button already exists (or a compatible one) - reuse it.
+      existingbutton = true
+    elseif IsWoWFrame(existing) then
+      -- A different UI frame already owns this global name.  Clobbering its
+      -- global reference could break that addon, so refuse and ask for a rename.
+      GSE.Print(string.format(GSEOptions.UNKNOWN .. "GSE:|r The sequence name '%s' is already used by another UI frame. Please rename this sequence to something unique so GSE can create its button.|r", tostring(name)))
+      return
+    else
+      -- nil, or a non-frame global (function/number/string/plain table).  Safe to
+      -- claim the name with a real secure button.  Warn if we overwrote something.
+      if existing ~= nil then
+        GSE.Print(string.format(GSEOptions.EmphasisColour .. "GSE:|r The name '%s' was already a global %s; GSE has taken it over for its macro button. Rename this sequence if anything misbehaves.|r", tostring(name), type(existing)))
+      end
+      GSE.CreateButton(name, tempseq)
       existingbutton = false
     end
     local gsebutton = _G[name]
+    if not IsUsableSecureButton(gsebutton) then
+      -- CreateFrame could not claim the name (still not a usable button).
+      GSE.Print(string.format(GSEOptions.UNKNOWN .. "GSE:|r Unable to create a usable macro button named '%s'. The name may be reserved by the client - please rename this sequence.|r", tostring(name)))
+      return
+    end
     -- only translate a sequence if the option to use the translator is on, there is a translator available and the sequence matches the current class
     if GetLocale() ~= "enUS" then
       tempseq = GSE.TranslateSequence(tempseq, name)
@@ -623,10 +670,14 @@ function GSE.OOCUpdateSequence(name,sequence)
       gsebutton:UnwrapScript(gsebutton,'OnClick')
     end
 
+    -- Previously both branches set combatreset to true, which made the per-sequence
+    -- Combat flag and the resetOOC option dead.  Honour them: reset on leaving
+    -- combat only when the sequence opts in (sequence.Combat) or the global
+    -- resetOOC option is on and the sequence hasn't overridden it.
     if (GSE.isEmpty(sequence.Combat) and GSEOptions.resetOOC ) or sequence.Combat then
       gsebutton:SetAttribute("combatreset", true)
     else
-      gsebutton:SetAttribute("combatreset", true)
+      gsebutton:SetAttribute("combatreset", false)
     end
     gsebutton:WrapScript(gsebutton, 'OnClick', GSE.PrepareOnClickImplementation(sequence))
     if not GSE.isEmpty(sequence.LoopLimit) then
@@ -660,18 +711,33 @@ end
 
 --- This funciton dumps what is currently running on an existing button.
 function GSE.DebugDumpButton(SequenceName)
-  local targetreset = ""
-  local looper = GSE.IsLoopSequence(GSELibrary[GSE.GetCurrentClassID()][SequenceName].MacroVersions[GSE.GetActiveSequenceVersion(SequenceName)])
-  if GSELibrary[GSE.GetCurrentClassID()][SequenceName].MacroVersions[GSE.GetActiveSequenceVersion(SequenceName)].Target then
-    targetreset = Statics.TargetResetImplementation
+  -- Look the sequence up under the current class, then Global, guarding every
+  -- step (previously this chained indexes off GSELibrary[class][name] and
+  -- _G[name] with no nil checks and referenced an undefined Statics field).
+  local seq = (GSELibrary[GSE.GetCurrentClassID()] and GSELibrary[GSE.GetCurrentClassID()][SequenceName])
+           or (GSELibrary[0] and GSELibrary[0][SequenceName])
+  if GSE.isEmpty(seq) then
+    GSE.Print("No sequence named '" .. tostring(SequenceName) .. "' found for the current class or Global.")
+    return
   end
+  local mv = seq.MacroVersions and seq.MacroVersions[GSE.GetActiveSequenceVersion(SequenceName)]
+  local looper = mv and GSE.IsLoopSequence(mv) or false
+  local btn = _G[SequenceName]
   GSE.Print("====================================\nStart GSE Button Dump\n====================================")
-  GSE.Print("Button name: "  .. SequenceName)
-  GSE.Print("KeyPress" .. _G[SequenceName]:GetAttribute('KeyPress'))
-  GSE.Print("KeyRelease" .. _G[SequenceName]:GetAttribute('KeyRelease'))
-  GSE.Print("LoopMacro?" .. tostring(looper))
+  GSE.Print("Button name: "  .. tostring(SequenceName))
+  if IsUsableSecureButton(btn) then
+    GSE.Print("KeyPress: " .. tostring(btn:GetAttribute('KeyPress')))
+    GSE.Print("KeyRelease: " .. tostring(btn:GetAttribute('KeyRelease')))
+    GSE.Print("macrotext: " .. tostring(btn:GetAttribute('macrotext')))
+    GSE.Print("step: " .. tostring(btn:GetAttribute('step')))
+  else
+    GSE.Print("No compiled GSE button exists at _G['" .. tostring(SequenceName) .. "'] (type: " .. type(btn) .. ")")
+  end
+  GSE.Print("LoopMacro? " .. tostring(looper))
   GSE.Print("====================================\nStepFunction\n====================================")
-  GSE.Print(GSE.PrepareOnClickImplementation(GSELibrary[GSE.GetCurrentClassID()][SequenceName].MacroVersions[GSE.GetActiveSequenceVersion(SequenceName)]))
+  if mv then
+    GSE.Print(GSE.PrepareOnClickImplementation(mv))
+  end
   GSE.Print("====================================\nEnd GSE Button Dump\n====================================")
 end
 
@@ -908,12 +974,14 @@ function GSE.CleanCorruptedSequences()
   end
 end
 
---- Not Used
+--- Returns a default icon for the current spec, falling back to the question mark.
 function GSE.GetDefaultIcon()
-  local currentSpec, currentSpecID,defaulticon = GSE.GetCurrentSpecID()
- -- local currentSpecID = currentSpec and select(1, GetSpecializationInfo(currentSpec)) or ""
-  
-  --local _, _, _, defaulticon, _, _, _ = GetSpecializationInfoByID(currentSpecID)
+  -- GetCurrentSpecID returns (specid, name, icon); the icon (a texture path) can
+  -- be nil on custom/classless servers.  strsub(nil, 17) would error, so guard it.
+  local currentSpec, currentSpecID, defaulticon = GSE.GetCurrentSpecID()
+  if GSE.isEmpty(defaulticon) then
+    return Statics.QuestionMark or "INV_MISC_QUESTIONMARK"
+  end
   return strsub(defaulticon, 17)
 end
 
@@ -978,15 +1046,12 @@ function GSE.GetMacroIcon(classid, sequenceIndex)
   local sequence = GSELibrary[classid][sequenceIndex]
   if(sequence==nil) then return "INV_MISC_QUESTIONMARK" end
   if GSE.isEmpty(sequence.Icon) and GSE.isEmpty(iconid) then
-    GSE.PrintDebugMessage("SequenceSpecID: " .. sequence.SpecID, GNOME)
-    if sequence.SpecID == 0 then
-      return "INV_MISC_QUESTIONMARK"
-    else
-     -- local _, _, _, specicon, _, _, _ = GetSpecializationInfoByID((GSE.isEmpty(sequence.SpecID) and GSE.GetCurrentSpecID() or sequence.SpecID))
-	 local specicon
-      GSE.PrintDebugMessage("No Sequence Icon setting to " .. strsub(specicon, 17), GNOME)
-      return strsub(specicon, 17)
-    end
+    GSE.PrintDebugMessage("SequenceSpecID: " .. tostring(sequence.SpecID), GNOME)
+    -- There is no 3.3.5a API to resolve a spec icon (GetSpecializationInfoByID
+    -- is retail-only).  The previous code dereferenced an always-nil 'specicon'
+    -- via strsub(specicon, 17) which errored whenever a sequence had no icon and
+    -- a non-zero SpecID.  Fall back to the question mark icon safely.
+    return "INV_MISC_QUESTIONMARK"
   elseif GSE.isEmpty(iconid) and not GSE.isEmpty(sequence.Icon) then
 
       return sequence.Icon
@@ -1061,15 +1126,20 @@ end
 
 function GSE.CreateButton(name, sequence)
   local gsebutton = CreateFrame('Button', name, nil, 'SecureActionButtonTemplate,SecureHandlerBaseTemplate')
+  if not gsebutton then
+    GSE.PrintDebugMessage("CreateButton: CreateFrame returned nil for " .. tostring(name), GNOME)
+    return
+  end
   gsebutton:SetAttribute('type', 'macro')
+  gsebutton.GSEButton = true -- marker so we can recognise our own buttons later
   --gsebutton:Execute('self:SetAttribute("step", 0)')
   --gsebutton:SetAttribute('step', 0)
   --gsebutton:Execute('step=0')
-  
+
   gsebutton.UpdateIcon = GSE.UpdateIcon
   gsebutton:HookScript("OnUpdate", GSE.btnOnUpdate)
   gsebutton:HookScript("OnClick", GSE.btnOnClick)
-  
+  return gsebutton
 end
 
 function GSE.btnOnClick(self, button)
@@ -1082,9 +1152,16 @@ function GSE.btnOnClick(self, button)
   end
 end
 
-function GSE.btnOnUpdate(self,...)
-local reset = self:GetAttribute("combatreset")
-GSE.UpdateIcon(self, reset)
+function GSE.btnOnUpdate(self, elapsed)
+  -- Throttle: OnUpdate fires every frame (~60+/s).  Running the whole icon-update
+  -- (and its debug output) that often was a major perf drain and, with debug on,
+  -- produced a torrent of chat spam.  Update ~10x/second instead.
+  self.GSEIconTimer = (self.GSEIconTimer or 0) + (elapsed or 0)
+  if self.GSEIconTimer < 0.1 then
+    return
+  end
+  self.GSEIconTimer = 0
+  GSE.UpdateIcon(self, self:GetAttribute("combatreset"))
 end
 
 -- Parse /castsequence command and return the next spell to cast
@@ -1176,14 +1253,15 @@ function GSE.UpdateIcon(self, reset)
   local step = self:GetAttribute('step') or 1
   
   local gsebutton = self:GetName()
+  -- NB: no PrintDebugMessage in these early-return paths.  UpdateIcon is driven
+  -- by OnUpdate, so any print here repeats every tick and floods the chat window
+  -- (the "millions of UpdateIcon: No execution sequence" spam).  Just bail.
   if GSE.isEmpty(GSE.SequencesExec) or GSE.isEmpty(GSE.SequencesExec[gsebutton]) then
-    GSE.PrintDebugMessage("UpdateIcon: No execution sequence found for " .. gsebutton, "Storage")
     return
   end
-  
+
   local executionseq = GSE.SequencesExec[gsebutton]
   if GSE.isEmpty(executionseq[step]) then
-    GSE.PrintDebugMessage("UpdateIcon: No command at step " .. step .. " for " .. gsebutton, "Storage")
     return
   end
   
@@ -1307,15 +1385,22 @@ end
 
 --- Moves Macros hidden in Global Macros to their appropriate class.
 function GSE.MoveMacroToClassFromGlobal()
+  if type(GSELibrary[0]) ~= "table" then
+    return
+  end
   for k,v in pairs(GSELibrary[0]) do
-    if not GSE.isEmpty(v.SpecID) and tonumber(v.SpecID) > 0 then
-      if v.SpecID < 12 then
-        GSELibrary[v.SpecID][k] = v
-        GSE.Print(string.format(L["Moved %s to class %s."], k, Statics.wotlkSpecIDList[v.SpecID]))
-        GSELibrary[0][k] = nil
-      else
-        GSELibrary[GSE.GetClassIDforSpec(v.SpecID)][k] = v
-        GSE.Print(string.format(L["Moved %s to class %s."], k, Statics.wotlkSpecIDList[GSE.GetClassIDforSpec(v.SpecID)]))
+    -- Guard: SpecID may be a string; the destination class bucket and
+    -- GetClassIDforSpec may be nil.  The old code did `v.SpecID < 12` (string vs
+    -- number error) and indexed GSELibrary[nil] blind.
+    local specid = tonumber(v.SpecID)
+    if specid and specid > 0 then
+      local targetClass = (specid < 12) and specid or tonumber(GSE.GetClassIDforSpec(specid))
+      if targetClass and targetClass > 0 then
+        if type(GSELibrary[targetClass]) ~= "table" then
+          GSELibrary[targetClass] = {}
+        end
+        GSELibrary[targetClass][k] = v
+        GSE.Print(string.format(L["Moved %s to class %s."], tostring(k), tostring(Statics.wotlkSpecIDList[targetClass] or targetClass)))
         GSELibrary[0][k] = nil
       end
     end
@@ -1353,8 +1438,13 @@ end
 
 --- This funcion returns the actual onclick implementation
 function GSE.PrepareOnClickImplementation(sequence)
-  local returnstring = (GSEOptions.DebugPrintModConditionsOnKeyPress and Statics.PrintKeyModifiers or "" )
-  returnstring = returnstring .. GSE.GetMacroResetImplementation()
+  -- Do NOT inject Statics.PrintKeyModifiers into the OnClick body: it contains
+  -- print() calls that would run in the restricted secure environment, which is
+  -- not reliably supported on custom clients (eg Conquest of Azeroth) and would
+  -- break EVERY macro the moment the DebugPrintModConditionsOnKeyPress option was
+  -- enabled - the same class of failure as a comment containing "function".  The
+  -- option is kept for compatibility but no longer feeds the secure snippet.
+  local returnstring = GSE.GetMacroResetImplementation()
   returnstring = returnstring  .. format(Statics.OnClick, GSE.PrepareStepFunction(sequence.StepFunction,  GSE.IsLoopSequence(sequence)))
   return returnstring
 end
@@ -1372,14 +1462,20 @@ end
 
 --- This function scans all macros in the library and reports on corrupt macros.
 function GSE.ScanMacrosForErrors()
-  for classlibid,classlib in ipairs(GSELibrary) do
+  -- pairs, not ipairs: GSELibrary is keyed by class id (0/Global plus sparse
+  -- class numbers), so ipairs stopped at the first gap and never scanned Global.
+  -- Also iterate seq.MacroVersions (the actual version list) rather than seq,
+  -- whose array part is empty - the old loop never checked a single macro.
+  for classlibid,classlib in pairs(GSELibrary) do
     for seqname, seq in pairs(classlib) do
-      for macroversionid, macroversion in ipairs(seq) do
+      if type(seq) == "table" and type(seq.MacroVersions) == "table" then
+      for macroversionid, macroversion in ipairs(seq.MacroVersions) do
         local status, error = pcall(GSE.CheckSequence, macroversion)
         if not status then
           GSE.Print(string.format(L["Error found in version %i of %s."], macroversionid, seqname), "Error")
           GSE.Print(string.format(L["To correct this either delete the version via the GSE Editor or enter the following command to delete this macro totally.  %s/run GSE.DeleteSequence (%i, %s)%s"], GSEOptions.CommandColour, classlibid, seqname, Statics.StringReset))
         end
+      end
       end
       if seqname == "WW" then
         GSE.Print(string.format(L["Macro found by the name %sWW%s. Rename this macro to a different name to be able to use it.  WOW has a hidden button called WW that is executed instead of this macro."], GSEOptions.CommandColour, Statics.StringReset), "Error")

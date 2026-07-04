@@ -55,8 +55,11 @@ function GSE.GUIPauseDebugView()
 end
 
 DebugFrame:SetTitle(L["Sequence Debugger"])
+-- Spell 61304 (Global Cooldown probe) may not exist on a custom spell DB, so
+-- GetSpellCooldown can return nil.  This runs at file-load scope; a nil concat
+-- here would abort loading the entire Debug window (breaking /gse debug).
 local _, GCD_Timer = GetSpellCooldown(61304)
-DebugFrame:SetStatusText(L["Gnome Sequencer: Sequence Debugger. Monitor the Execution of your Macro"] .. "   GCD: " .. GCD_Timer)
+DebugFrame:SetStatusText(L["Gnome Sequencer: Sequence Debugger. Monitor the Execution of your Macro"] .. "   GCD: " .. tostring(GCD_Timer or 0))
 DebugFrame:SetCallback("OnClose", function(widget) DebugFrame:Hide()  end)
 DebugFrame:SetLayout("List")
 DebugFrame:Hide()

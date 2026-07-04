@@ -220,7 +220,10 @@ function GSE.StripControlandExtendedCodes( str )
     elseif str:byte(i) == 10 then -- leave line breaks unix style
       s = s .. str:sub(i,i)
     elseif str:byte(i) == 13 then -- leave line breaks windows style
-      s = s .. str:sub(i, str:byte(10))
+      -- Was str:sub(i, str:byte(10)) - str:byte(10) is the byte value at the fixed
+      -- position 10, used (wrongly) as an end index, which duplicated/garbled text
+      -- on any import containing a carriage return.  Keep just this one character.
+      s = s .. str:sub(i,i)
     elseif str:byte(i) >= 128 then -- extended characters including accented characters for intenational languages
       s = s .. str:sub(i,i)
     else -- convert everything else to whitespace

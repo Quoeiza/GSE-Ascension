@@ -562,9 +562,8 @@ function GSE.LoadDocumentedSampleMacros()
     end
 end
 
--- Add a slash command to load sample macros
-SLASH_GSELOADSAMPLES1 = "/gse loadsamples"
-SlashCmdList["GSELOADSAMPLES"] = function()
-    GSE.LoadDocumentedSampleMacros()
-    GSE.Print("Sample macros for your class have been loaded. Type /gse to view them.", "GSE")
-end
+-- NB: "/gse loadsamples" is already handled by GSE's AceConsole slash handler
+-- (GSSlash in Events.lua).  The previous SLASH_GSELOADSAMPLES registration here
+-- was unreachable ("/gse loadsamples" only ever matches the "/gse" token, which
+-- AceConsole owns), redundant, and leaked SLASH_GSELOADSAMPLES1 / SlashCmdList
+-- entries into the global namespace.  Removed.

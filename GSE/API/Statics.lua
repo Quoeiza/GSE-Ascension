@@ -271,6 +271,14 @@ print("Any mod key " .. tostring(IsModifierKeyDown()))
 print("GetMouseButtonClicked() " .. GetMouseButtonClicked() )
 ]]
 
+-- IMPORTANT: everything between [=[ and ]=] below runs in the RESTRICTED secure
+-- environment.  Custom 3.3.5a clients (eg Conquest of Azeroth) run a hardened
+-- restricted parser that rejects certain tokens - notably the word "function" -
+-- even when they appear inside a Lua comment.  So this snippet must stay
+-- COMMENT-FREE and must not contain disallowed keywords.  Do NOT add comments,
+-- print(), or function definitions inside the [=[ ]=] block.
+-- The invalid-step guard just resets step to 1 (no print - not guaranteed to be
+-- whitelisted either).
 Statics.OnClick = [=[
 local step = self:GetAttribute('step')
 local loopstart = self:GetAttribute('loopstart') or 1
@@ -284,13 +292,11 @@ looplimit = tonumber(looplimit)
 step = tonumber(step)
 self:SetAttribute('macrotext', self:GetAttribute('KeyPress') .. "\n" .. macros[step] .. "\n" .. self:GetAttribute('KeyRelease'))
 %s
-if not step or not macros[step] then -- User attempted to write a step method that doesn't work, reset to 1
-  print('|cffff0000Invalid step assigned by custom step sequence', self:GetName(), step or 'nil', '|r')
+if not step or not macros[step] then
   step = 1
 end
 self:SetAttribute('step', step)
 self:SetAttribute('loopiter', loopiter)
---self:CallMethod('UpdateIcon')
 ]=]
 
 --- <code>GSStaticLoopPriority</code> is a static step function that
@@ -298,7 +304,6 @@ self:SetAttribute('loopiter', loopiter)
 --    eg 12342345
 Statics.LoopSequentialImplementation = [[
 if step < loopstart then
-  -- I am before the loop increment to next step.
   step = step + 1
 elseif step > loopstop then
   if step >= #macros then

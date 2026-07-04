@@ -75,3 +75,4 @@ API\Plugins.lua
 API\Serialisation.lua
 API\Options.lua
 API\Events.lua
+API\Diagnostics.lua

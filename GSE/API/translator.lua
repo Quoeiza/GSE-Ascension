@@ -29,8 +29,9 @@ if GetLocale() ~= "enUS" then
 end
 
 function GSE.ListCachedLanguages()
-  t = {}
-  i = 1
+  -- t and i were global (untyped) - global pollution and a taint risk. Localise.
+  local t = {}
+  local i = 1
   for name, _ in pairs(GSE.TranslatorLanguageTables[Statics.TranslationKey]) do
     t[i] = name
     GSE.PrintDebugMessage("found " .. name, GNOME)
@@ -332,10 +333,15 @@ end
 -- This information is used by the GSEUtils that generates the enUS.lua, enUSHash.lua and enUSSHADOW.lua files.
 function GSE.ReportUnfoundSpells()
   GSEOptions.UnfoundSpells = {}
-  for classid, macroset in ipairs(GSELibrary) do
-    for name, version in pairs(macroset) do
-      for v, sequence in ipairs(version) do
-        GSE.TranslateSequenceFromTo(sequence, "enUS", "enUS", name)
+  -- pairs (not ipairs) so Global/0 and sparse class ids are covered, and iterate
+  -- the actual MacroVersions list of each sequence (the old ipairs(version) walked
+  -- the sequence object's empty array part and translated nothing).
+  for classid, macroset in pairs(GSELibrary) do
+    for name, seqobj in pairs(macroset) do
+      if type(seqobj) == "table" and type(seqobj.MacroVersions) == "table" then
+        for v, sequence in ipairs(seqobj.MacroVersions) do
+          GSE.TranslateSequenceFromTo(sequence, "enUS", "enUS", name)
+        end
       end
     end
   end

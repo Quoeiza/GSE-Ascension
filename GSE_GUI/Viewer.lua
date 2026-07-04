@@ -263,7 +263,7 @@ function GSE.GUIViewerToolbar(container)
   local newbutton = AceGUI:Create("Button")
   newbutton:SetText(L["New"])
   newbutton:SetWidth(150)
-  newbutton:SetCallback("OnClick", function() GSE.isNewFirstTimeCreated=true,GSE.GUILoadEditor(nil, viewframe) end)
+  newbutton:SetCallback("OnClick", function() GSE.isNewFirstTimeCreated=true; GSE.GUILoadEditor(nil, viewframe) end)
   buttonGroup:AddChild(newbutton)
 
   local updbutton = AceGUI:Create("Button")

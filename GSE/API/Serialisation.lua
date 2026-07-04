@@ -4,6 +4,9 @@ local Statics = GSE.Static
 local libS = LibStub:GetLibrary("AceSerializer-3.0")
 local libC = LibStub:GetLibrary("LibCompress")
 local libCE = libC:GetAddonEncodeTable()
+-- "Have we already warned the user that GSE is out of date" flag.  Was a bare
+-- global written by GSE.performVersionCheck; file-local to avoid global pollution.
+local GSold = false
 
 local bytetoB64 = {
     [0]="a","b","c","d","e","f","g","h",
@@ -131,7 +134,9 @@ function GSE.TransmitSequence(key, channel, target)
   t.ClassID = classid
   t.SequenceName = SequenceName
   t.Sequence = GSELibrary[classid][SequenceName]
-  GSSendMessage(t, channel, target)
+  -- Was GSSendMessage(...) - an undefined global that errored out every send.
+  -- The real implementation is GSE.sendMessage.
+  GSE.sendMessage(t, channel, target)
   GSE.GUITransmissionFrame:SetStatusText(SequenceName .. L[" sent"])
 end
 
@@ -157,11 +162,17 @@ function GSE.sendMessage(tab, channel, target)
 end
 
 function GSE.performVersionCheck(version)
-  if(tonumber(version) ~= nil and tonumber(version) > tonumber(GSE.VersionString)) then
+  -- GSE.VersionString can be non-numeric (eg "2204-wotlk").  tonumber() on it is
+  -- nil, and the old code then did `number > nil` / `number - nil`, which errors
+  -- whenever a version-check comm is received from another GSE user.  Compare the
+  -- leading numeric build numbers instead and bail out safely if either is absent.
+  local localVersion = tonumber(GSE.VersionString) or tonumber(string.match(tostring(GSE.VersionString or ""), "%d+"))
+  local remoteVersion = tonumber(version) or tonumber(string.match(tostring(version or ""), "%d+"))
+  if remoteVersion and localVersion and remoteVersion > localVersion then
     if not GSold then
       GSE.Print(L["GSE is out of date. You can download the newest version from https://mods.curse.com/addons/wow/gnomesequencer-enhanced."], Statics.SourceTransmission)
       GSold = true
-      if((tonumber(version) - tonumber(GSE.VersionString)) >= 5) then
+      if (remoteVersion - localVersion) >= 5 then
         StaticPopup_Show('GSE_UPDATE_AVAILABLE')
       end
     end

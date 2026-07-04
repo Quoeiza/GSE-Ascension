@@ -177,6 +177,11 @@ function GSE.GUIEditorPerformLayout(frame)
   nameeditbox:SetWidth(250)
   nameeditbox:SetCallback("OnTextChanged", function() editframe.SequenceName = nameeditbox:GetText(); end)
   nameeditbox:DisableButton( true)
+  -- The Inner Loop Limit editbox calls SetNumeric(true) on its underlying frame.
+  -- AceGUI pools EditBox frames and does NOT reset numeric state on re-acquire,
+  -- so a recycled numeric frame can end up here and lock this field to digits
+  -- only (the "can't rename / numeric only input" bug).  Force it back to text.
+  if nameeditbox.editbox then nameeditbox.editbox:SetNumeric(false) end
   nameeditbox:SetText(editframe.SequenceName)
   editframe.nameeditbox = nameeditbox
   headerGroup:AddChild(nameeditbox)
@@ -305,14 +310,21 @@ function GSE:GUIDrawMetadataEditor(container)
     editframe.SpecID = sid
     editframe.Sequence.SpecID = sid
 
-    if tonumber(sid) > 12 then
-      editframe.ClassID = GSE.GetClassIDforSpec(tonumber(sid))
+    -- sid can be nil when the selected name isn't in the hash (custom class/spec).
+    -- tonumber(nil) > 12 used to error here; fall back to Global (0) instead.
+    local nsid = tonumber(sid)
+    if nsid and nsid > 12 then
+      editframe.ClassID = GSE.GetClassIDforSpec(nsid)
+    elseif nsid then
+      editframe.ClassID = nsid
     else
-      editframe.ClassID = tonumber(sid)
+      editframe.ClassID = 0
     end
   end)
   metasimplegroup:AddChild(speciddropdown)
-  speciddropdown:SetValue(Statics.wotlkSpecIDList[editframe.Sequence.SpecID])
+  -- Fall back to "Global" so the dropdown never shows a blank selection when the
+  -- sequence's SpecID isn't in the recognised list (eg classless characters).
+  speciddropdown:SetValue(Statics.wotlkSpecIDList[editframe.Sequence.SpecID] or Statics.wotlkSpecIDList[0])
 
 
   local spacerlabel1 = AceGUI:Create("Label")
@@ -323,6 +335,7 @@ function GSE:GUIDrawMetadataEditor(container)
   talentseditbox:SetLabel(L["Talents"])
   talentseditbox:SetWidth(200)
   talentseditbox:DisableButton( true)
+  if talentseditbox.editbox then talentseditbox.editbox:SetNumeric(false) end
   metasimplegroup:AddChild(talentseditbox)
   contentcontainer:AddChild(metasimplegroup)
   talentseditbox:SetText(editframe.Sequence.Talents)
@@ -352,6 +365,7 @@ function GSE:GUIDrawMetadataEditor(container)
   helplinkeditbox:SetLabel(L["Help Link"])
   helplinkeditbox:SetWidth(250)
   helplinkeditbox:DisableButton( true)
+  if helplinkeditbox.editbox then helplinkeditbox.editbox:SetNumeric(false) end
   if not GSE.isEmpty(editframe.Sequence.Helplink) then
     helplinkeditbox:SetText(editframe.Sequence.Helplink)
   end
@@ -368,6 +382,7 @@ function GSE:GUIDrawMetadataEditor(container)
   authoreditbox:SetLabel(L["Author"])
   authoreditbox:SetWidth(250)
   authoreditbox:DisableButton( true)
+  if authoreditbox.editbox then authoreditbox.editbox:SetNumeric(false) end
   if not GSE.isEmpty(editframe.Sequence.Author) then
     authoreditbox:SetText(editframe.Sequence.Author)
   end
