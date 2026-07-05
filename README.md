@@ -17,9 +17,8 @@ Lineage: GnomeSequencer (semlar), GSE (TimothyLuke), WotLK backport (Gummed), 3.
 - A character resolves to its own class instead of falling back to Global. Nothing is tied to a specific realm.
 - New sequences default to the Global class.
 
-### Editor and interface
+### Editor
 - Fixed the editor name and icon fields locking to numeric-only input.
-- Added a GSE button to the game menu (Esc).
 
 ### Diagnostics
 - `/gse diag` runs a self-test (secure environment check, a live compile test, class list, button state) and writes the result to SavedVariables.
@@ -54,7 +53,7 @@ Lineage: GnomeSequencer (semlar), GSE (TimothyLuke), WotLK backport (Gummed), 3.
 
 | Command | Effect |
 | --- | --- |
-| `/gse` | Open the main Sequence Viewer (also on the game-menu GSE button) |
+| `/gse` | Open the main Sequence Viewer |
 | `/gse help` | Print help |
 | `/gse showspec` | Show your detected class and spec id |
 | `/gse loadsamples` | Load sample macros for your class |
@@ -67,7 +66,7 @@ Lineage: GnomeSequencer (semlar), GSE (TimothyLuke), WotLK backport (Gummed), 3.
 
 ### Creating a macro
 
-1. Open `/gse` or the game-menu GSE button, then New.
+1. Open `/gse`, then New.
 2. Give it a unique name.
 3. Add your macro commands, one step per line.
 4. Choose a Step Function. Sequential steps through your list in order. Priority repeats earlier steps more often. The editor labels show the pattern for each.
