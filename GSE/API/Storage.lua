@@ -571,6 +571,7 @@ function GSE.ResetButtons()
     if IsUsableSecureButton(gsebutton) then
       if gsebutton:GetAttribute("combatreset") == true then
         gsebutton:SetAttribute("step",1)
+        gsebutton:SetAttribute("limit",1)
         GSE.UpdateIcon(gsebutton, true)
         GSE.UsedSequences[k] = nil
       end
@@ -662,6 +663,9 @@ function GSE.OOCUpdateSequence(name,sequence)
 
     gsebutton:Execute('name, macros = self:GetName(), newtable([=======[' .. strjoin(']=======],[=======[', unpack(executionseq)) .. ']=======])')
     gsebutton:SetAttribute("step",1)
+    -- Priority stepping tracks a persisted 'limit' attribute (see Statics.OnClick).
+    -- Reset it with step so a recompiled sequence restarts its priority cycle.
+    gsebutton:SetAttribute("limit",1)
     gsebutton:SetAttribute('KeyPress',table.concat(GSE.PrepareKeyPress(tempseq), "\n") or '' .. '\n')
     GSE.PrintDebugMessage("GSUpdateSequence KeyPress updated to: " .. gsebutton:GetAttribute('KeyPress'))
     gsebutton:SetAttribute('KeyRelease',table.concat(GSE.PrepareKeyRelease(tempseq), "\n") or '' .. '\n')
@@ -1249,7 +1253,7 @@ function GSE.GetNextCastSequenceSpell(buttonName, castSequenceArgs)
 end
 
 function GSE.UpdateIcon(self, reset)
-	
+
   local step = self:GetAttribute('step') or 1
   
   local gsebutton = self:GetName()

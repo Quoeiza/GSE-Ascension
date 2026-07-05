@@ -285,11 +285,13 @@ local loopstart = self:GetAttribute('loopstart') or 1
 local loopstop = self:GetAttribute('loopstop') or #macros
 local loopiter = self:GetAttribute('loopiter') or 1
 local looplimit = self:GetAttribute('looplimit') or 0
+local limit = self:GetAttribute('limit') or loopstart
 loopstart = tonumber(loopstart)
 loopstop = tonumber(loopstop)
 loopiter = tonumber(loopiter)
 looplimit = tonumber(looplimit)
 step = tonumber(step)
+limit = tonumber(limit)
 self:SetAttribute('macrotext', self:GetAttribute('KeyPress') .. "\n" .. macros[step] .. "\n" .. self:GetAttribute('KeyRelease'))
 %s
 if not step or not macros[step] then
@@ -297,6 +299,7 @@ if not step or not macros[step] then
 end
 self:SetAttribute('step', step)
 self:SetAttribute('loopiter', loopiter)
+self:SetAttribute('limit', limit)
 ]=]
 
 --- <code>GSStaticLoopPriority</code> is a static step function that
@@ -354,6 +357,7 @@ Statics.MacroResetSkeleton = [[
 if %s then
   self:SetAttribute('step', 1)
   self:SetAttribute('loopiter', 1)
+  self:SetAttribute('limit', 1)
 end
 ]]
 
