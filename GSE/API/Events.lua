@@ -141,6 +141,20 @@ function GSE:PLAYER_ENTERING_WORLD()
     GSE.StartOOCTimer()
     GSE.DiagTimerRearmed = true
   end
+  -- (Re)apply any Press/Release key bindings now that we are in the world.  Override
+  -- bindings resolve their button by name at key-press time, so this is safe even
+  -- if a bound sequence has not finished compiling yet.
+  if GSE.ApplyKeyBinds then
+    GSE.ApplyKeyBinds()
+  end
+end
+
+-- Re-detect and re-apply Press/Release key bindings whenever the player changes a
+-- key binding (so auto-detect picks up a newly-bound macro key without a reload).
+function GSE:UPDATE_BINDINGS()
+  if GSE.ApplyKeyBinds then
+    GSE.ApplyKeyBinds()
+  end
 end
 
 function GSE:ADDON_LOADED(event, addon)
@@ -327,6 +341,7 @@ end
 -- GSE:RegisterEvent("GROUP_ROSTER_UPDATE") -- Doesn't exist in 3.3.5a, using PARTY_MEMBERS_CHANGED instead
 GSE:RegisterEvent('PLAYER_LOGOUT')
 GSE:RegisterEvent('PLAYER_ENTERING_WORLD')
+GSE:RegisterEvent('UPDATE_BINDINGS')
 GSE:RegisterEvent('PLAYER_REGEN_ENABLED')
 GSE:RegisterEvent('ADDON_LOADED')
 GSE:RegisterEvent('UNIT_SPELLCAST_SUCCEEDED')
@@ -524,6 +539,11 @@ function GSE:ProcessOOCQueue()
         GSE.Print((GSEOptions.UNKNOWN or "") .. "GSE could not process a queued change for '" .. tostring(label) .. "'." .. (Statics.StringReset or "") .. " " .. tostring(err))
       end
     end
+  end
+  -- After draining compiles, (re)apply Press/Release key bindings so a freshly
+  -- compiled sequence button picks up its override binding this session.
+  if GSE.ApplyKeyBinds then
+    GSE.ApplyKeyBinds()
   end
 end
 

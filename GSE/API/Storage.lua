@@ -661,6 +661,13 @@ function GSE.OOCUpdateSequence(name,sequence)
 
     GSE.SequencesExec[name] = executionseq
 
+    -- Key bindings to fire on each click (eg TARGETCLOSESTENEMY).  Stored as a
+    -- plain frame field (NOT a secure attribute) and run from the insecure
+    -- GSE.btnOnClick hook - see that function for why this is the only context on
+    -- this client where RunBinding actually fires.  nil clears it when the field
+    -- is emptied so removing a binding takes effect on recompile.
+    gsebutton.GSERunBindings = (type(tempseq.RunBindings) == "table") and tempseq.RunBindings or nil
+
     gsebutton:Execute('name, macros = self:GetName(), newtable([=======[' .. strjoin(']=======],[=======[', unpack(executionseq)) .. ']=======])')
     gsebutton:SetAttribute("step",1)
     -- Priority stepping tracks a persisted 'limit' attribute (see Statics.OnClick).
@@ -684,6 +691,16 @@ function GSE.OOCUpdateSequence(name,sequence)
       gsebutton:SetAttribute("combatreset", false)
     end
     gsebutton:WrapScript(gsebutton, 'OnClick', GSE.PrepareOnClickImplementation(sequence))
+    -- With the "Cast on key press and release" option on (default), every sequence
+    -- button listens on BOTH edges (key-down and key-up) so one tap works through
+    -- two steps: it casts the next ability on press and the following one on
+    -- release.  The trigger key is auto-detected (or set in the editor); see
+    -- GSE.ApplyKeyBinds.  With the option off, buttons keep the single key-up trigger.
+    if type(GSEOptions) == "table" and GSEOptions.pressReleaseCast ~= false then
+      gsebutton:RegisterForClicks("AnyUp", "AnyDown")
+    else
+      gsebutton:RegisterForClicks("AnyUp")
+    end
     if not GSE.isEmpty(sequence.LoopLimit) then
       gsebutton:SetAttribute('looplimit', sequence.LoopLimit)
     end
@@ -711,6 +728,151 @@ function GSE.PrepareStepFunction(stepper, looper)
     end
   end
   return retvalue
+end
+
+-- Key-binding support for firing a sequence on both key edges.
+--  A sequence with a Press/Release key (set in the editor) is clicked directly by
+--  that key (via an override binding) and its button is registered for
+--  AnyUp+AnyDown, so one press fires step 1 on key-down and step 2 on key-up.
+--  Bindings persist in GSEOptions.KeyBinds (KEY -> sequence name), re-applied on login.
+GSE.BindFrame = GSE.BindFrame or CreateFrame("Frame")
+
+--- Best-effort: find the key that triggers sequence NAME's action-bar macro, so
+--  Press/Release can bind it automatically.  Returns a binding string (eg
+--  "SHIFT-E") or "" when it can't be determined (some custom bars hide the key -
+--  the editor's Press/Release field is the fallback).  Guarded so it never errors.
+function GSE.DetectSequenceKey(name)
+  if GSE.isEmpty(name) or type(GetMacroIndexByName) ~= "function" then
+    return ""
+  end
+  local macroIndex = GetMacroIndexByName(name)
+  if not macroIndex or macroIndex == 0 then
+    return ""
+  end
+  local function keyForButton(bname, blizzbinding)
+    local btn = _G[bname]
+    if type(btn) ~= "table" or type(btn.GetObjectType) ~= "function" then
+      return nil
+    end
+    local slot = btn.action
+    if not slot and type(btn.GetAttribute) == "function" then
+      slot = btn:GetAttribute("action")
+    end
+    if not slot then
+      return nil
+    end
+    local atype, id = GetActionInfo(slot)
+    if atype ~= "macro" or id ~= macroIndex then
+      return nil
+    end
+    local key
+    if blizzbinding then
+      key = GetBindingKey(blizzbinding)
+    end
+    if not key then key = GetBindingKey("CLICK " .. bname .. ":LeftButton") end
+    if not key then key = GetBindingKey("CLICK " .. bname) end
+    return key
+  end
+  -- Default Blizzard bars use fixed binding names.
+  local blizz = {
+    { "ActionButton", "ACTIONBUTTON" },
+    { "MultiBarBottomLeftButton", "MULTIACTIONBAR1BUTTON" },
+    { "MultiBarBottomRightButton", "MULTIACTIONBAR2BUTTON" },
+    { "MultiBarRightButton", "MULTIACTIONBAR3BUTTON" },
+    { "MultiBarLeftButton", "MULTIACTIONBAR4BUTTON" },
+  }
+  for _, p in ipairs(blizz) do
+    for i = 1, 12 do
+      local k = keyForButton(p[1] .. i, p[2] .. i)
+      if k then return k end
+    end
+  end
+  -- ElvUI (up to 10 bars x 12), Bartender4 and Dominos use a CLICK binding.
+  for bar = 1, 10 do
+    for i = 1, 12 do
+      local k = keyForButton("ElvUI_Bar" .. bar .. "Button" .. i, nil)
+      if k then return k end
+    end
+  end
+  for i = 1, 120 do
+    local k = keyForButton("BT4Button" .. i, nil) or keyForButton("DominosActionButton" .. i, nil)
+    if k then return k end
+  end
+  return ""
+end
+
+--- Clears and re-applies the Press/Release override binding for every compiled
+--  sequence.  Each sequence's key is the one set in the editor (a manual override)
+--  or, when that is blank, whatever GSE.DetectSequenceKey finds on the bars.
+--  Override bindings resolve their button by name at key-press time.  No-ops in
+--  combat or when the "Cast on key press and release" option is off.
+function GSE.ApplyKeyBinds()
+  if not GSE.BindFrame or InCombatLockdown() then
+    return
+  end
+  ClearOverrideBindings(GSE.BindFrame)
+  if type(GSEOptions) ~= "table" or GSEOptions.pressReleaseCast == false or type(GSE.SequencesExec) ~= "table" then
+    return
+  end
+  for name in pairs(GSE.SequencesExec) do
+    if IsUsableSecureButton(_G[name]) then
+      local key = GSE.GetSequenceKeyBind(name)
+      if GSE.isEmpty(key) then
+        local ok, detected = pcall(GSE.DetectSequenceKey, name)
+        if ok and not GSE.isEmpty(detected) then
+          key = detected
+        end
+      end
+      if not GSE.isEmpty(key) then
+        SetOverrideBindingClick(GSE.BindFrame, true, strupper(key), name, "LeftButton")
+      end
+    end
+  end
+end
+
+--- Returns the key currently bound to sequence NAME (eg "SHIFT-E"), or "" if none.
+function GSE.GetSequenceKeyBind(name)
+  if GSE.isEmpty(name) or type(GSEOptions) ~= "table" or type(GSEOptions.KeyBinds) ~= "table" then
+    return ""
+  end
+  for k, n in pairs(GSEOptions.KeyBinds) do
+    if n == name then
+      return k
+    end
+  end
+  return ""
+end
+
+--- Sets the key that fires sequence NAME on both key edges (step 1 on key-down,
+--  step 2 on key-up), or clears it when KEY is empty.  Each sequence has at most
+--  one such key.  Driven by the Press/Release key field in the editor.
+function GSE.SetSequenceKeyBind(name, key)
+  if GSE.isEmpty(name) or type(GSEOptions) ~= "table" then
+    return
+  end
+  GSEOptions.KeyBinds = GSEOptions.KeyBinds or {}
+  -- One key per sequence: drop any key currently mapped to this sequence.
+  for k, n in pairs(GSEOptions.KeyBinds) do
+    if n == name then
+      GSEOptions.KeyBinds[k] = nil
+    end
+  end
+  if not GSE.isEmpty(key) then
+    GSEOptions.KeyBinds[strupper(key)] = name
+  end
+  -- Refresh the override bindings out of combat (secure).  Both-edge click
+  -- registration is governed globally by the "Cast on key press and release"
+  -- option and applied at compile, so only mirror that here for the live button.
+  if not InCombatLockdown() then
+    if IsUsableSecureButton(_G[name]) then
+      if type(GSEOptions) == "table" and GSEOptions.pressReleaseCast ~= false then
+        _G[name]:RegisterForClicks("AnyUp", "AnyDown")
+      else
+        _G[name]:RegisterForClicks("AnyUp")
+      end
+    end
+    GSE.ApplyKeyBinds()
+  end
 end
 
 --- This funciton dumps what is currently running on an existing button.
@@ -1153,6 +1315,26 @@ function GSE.btnOnClick(self, button)
     local state = GSE.CastSequenceState[buttonName]
     state.position = state.position + 1
     -- Position will wrap around in GetNextCastSequenceSpell if needed
+  end
+  -- Fire any per-sequence key bindings (eg TARGETCLOSESTENEMY) on each click.
+  -- WHY HERE: this is an insecure OnClick POST-hook running on a genuine hardware
+  -- click - the same clean-insecure + hardware-event context a native macro's
+  -- "/run RunBinding(...)" uses.  On this client RunBinding works from that context
+  -- but is refused from the button's own secure macrotext, so a binding placed in
+  -- KeyPress/PreMacro never fires.  A native macro proves targeting + casting can
+  -- both happen in one hardware event, so firing the binding from this post-hook
+  -- (after the secure cast) still targets - it just applies to the next cast, which
+  -- steady-state spamming and the press/release double-click both cover.
+  -- NEVER set a secure attribute here - that would taint the cast path.  pcall so a
+  -- mistyped/unknown binding can't error the hook, and guard RunBinding for realms
+  -- that don't expose it (realm-agnostic no-op).
+  local bindings = self.GSERunBindings
+  if type(bindings) == "table" and type(RunBinding) == "function" then
+    for _, b in ipairs(bindings) do
+      if type(b) == "string" and b ~= "" then
+        pcall(RunBinding, b)
+      end
+    end
   end
 end
 

@@ -58,6 +58,7 @@ function GSE.GUILoadEditor(key, incomingframe, recordedstring)
           ["PostMacro"] = {},
           ["KeyPress"] = {},
           ["KeyRelease"] = {},
+          ["RunBindings"] = {},
           ["StepFunction"] = "Sequential",
           [1] = "/say Hello",
         }

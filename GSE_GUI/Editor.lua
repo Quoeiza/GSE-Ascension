@@ -624,6 +624,55 @@ function GSE:GUIDrawMacroEditor(container, version)
   linegroup1:AddChild(delversionbutton)
 
   contentcontainer:AddChild(linegroup1)
+
+  -- Press/Release key (fallback for the global "Cast on key press and release"
+  -- option).  GSE normally auto-detects the key your macro is bound to; only set a
+  -- key here if auto-detect can't find it (some custom bars hide it).  A key set
+  -- here fires the sequence's next ability on press and the following one on
+  -- release.  Click the field and press Escape to clear it.
+  local prkeygroup = AceGUI:Create("SimpleGroup")
+  prkeygroup:SetLayout("Flow")
+  prkeygroup:SetWidth(editframe.Width - 100)
+  prkeygroup:SetAutoAdjustHeight(false)
+  prkeygroup:SetHeight(48)
+
+  local prkeybind = AceGUI:Create("Keybinding")
+  prkeybind:SetLabel("Press/Release key  (auto-detected; set only if it doesn't fire; Esc clears)")
+  prkeybind:SetWidth(400)
+  prkeybind:SetKey(GSE.GetSequenceKeyBind and GSE.GetSequenceKeyBind(editframe.SequenceName) or "")
+  prkeybind:SetCallback("OnKeyChanged", function(widget, event, key)
+    if GSE.SetSequenceKeyBind then
+      GSE.SetSequenceKeyBind(editframe.SequenceName, key)
+    end
+  end)
+  prkeygroup:AddChild(prkeybind)
+  contentcontainer:AddChild(prkeygroup)
+
+  -- Run Bindings: engine key-binding commands to fire on every button press (eg
+  -- TARGETCLOSESTENEMY).  These are run via RunBinding from GSE's insecure OnClick
+  -- hook, which is the only context that works on this client - a binding placed in
+  -- KeyPress/PreMacro is refused from the secure macrotext.  One binding name per
+  -- line.  Leave blank for none.  Works alongside press/release (fires each edge).
+  local runbindgroup = AceGUI:Create("SimpleGroup")
+  runbindgroup:SetLayout("Flow")
+  runbindgroup:SetWidth(editframe.Width - 100)
+  runbindgroup:SetAutoAdjustHeight(false)
+  runbindgroup:SetHeight(56)
+
+  local RunBindingsbox = AceGUI:Create("MultiLineEditBox")
+  RunBindingsbox:SetLabel("Run Bindings on press (one binding name per line, eg TARGETCLOSESTENEMY - auto-targets on every press; needs no /run)")
+  RunBindingsbox:SetNumLines(2)
+  RunBindingsbox:DisableButton(true)
+  RunBindingsbox:SetFullWidth(true)
+  if not GSE.isEmpty(editframe.Sequence.MacroVersions[version].RunBindings) then
+    RunBindingsbox:SetText(table.concat(editframe.Sequence.MacroVersions[version].RunBindings, "\n"))
+  end
+  RunBindingsbox:SetCallback("OnTextChanged", function (sel, object, value)
+    editframe.Sequence.MacroVersions[version].RunBindings = GSE.SplitMeIntolines(value)
+  end)
+  runbindgroup:AddChild(RunBindingsbox)
+  contentcontainer:AddChild(runbindgroup)
+
   local linegroup2 = AceGUI:Create("SimpleGroup")
   linegroup2:SetLayout("Flow")
   linegroup2:SetWidth(editframe.Width - 100)

@@ -149,6 +149,15 @@ function GSE.GetOptionsTable()
             name = L["Gameplay Options"],
             order = 500
           },
+          pressReleaseCast={
+            name = "Cast on key press and release",
+            desc = "When on, a GSE macro casts the next ability in its sequence on the key press and the following ability on the key release, so one tap works through two abilities instead of one (it cycles through however many the sequence has). GSE tries to detect the macro's key on your action bars automatically; if your bars are custom (ElvUI, Bartender, Dominos) and it can't, set the key in the sequence editor's Press/Release field.",
+            type = "toggle",
+            width = "full",
+            set = function(info,val) GSEOptions.pressReleaseCast = val GSE.ReloadSequences() if GSE.ApplyKeyBinds then GSE.ApplyKeyBinds() end end,
+            get = function(info) return GSEOptions.pressReleaseCast ~= false end,
+            order = 505
+          },
           requireTarget={
             name = L["Require Target to use"],
             desc = L["This option prevents macros firing unless you have a target. Helps reduce mistaken targeting of other mobs/groups when your target dies."],
